@@ -14,6 +14,8 @@
 
 #include "spi.h"
 
+#define MSB_FIRST (1)
+
 #define ASSERTED 1
 
 typedef struct internal_ctx {
@@ -44,7 +46,12 @@ static inline void receive_part_word(internal_ctx_t *ctx, uint32_t in_word, size
 
     if (*valid_bits > 0) {
         asm volatile("mkmsk %0, %1": "=r"(mask) : "r"(*valid_bits));
+#if MSB_FIRST
         in_word = bitrev(in_word) & mask;
+#else
+        in_word = byterev(in_word);
+        in_word = in_word & mask;
+#endif
 
         /* Switch based on valid bits */
         uint32_t partial_shift_8 = *valid_bits - 8;
@@ -66,6 +73,7 @@ static inline void receive_part_word(internal_ctx_t *ctx, uint32_t in_word, size
         } else if (*valid_bits <= 16) {
             if (diff >= 1) {
                 *(ctx->in_buf_cur + 0) = (uint8_t)((in_word>>partial_shift_8) & 0xff);
+                
             }
             if (diff >= 2) {
                 asm volatile("mkmsk %0, %1": "=r"(mask) : "r"(partial_shift_8));
@@ -121,8 +129,10 @@ static inline void receive_part_word(internal_ctx_t *ctx, uint32_t in_word, size
 
 __attribute__((always_inline))
 static void inline receive_word(internal_ctx_t *ctx, uint32_t in_word) {
+#if MSB_FIRST
     in_word = bitrev(in_word);
     in_word = byterev(in_word);
+#endif
 
     for (int i=0; i<4; i++)
     {
@@ -143,8 +153,10 @@ static inline uint32_t get_next_word(internal_ctx_t *ctx) {
     if (ctx->out_buf_cur < ctx->out_buf_end)
     {
         out_word = *(uint32_t*)ctx->out_buf_cur;
+#if MSB_FIRST
         out_word = bitrev(out_word);
         out_word = byterev(out_word);
+#endif  
         switch(ctx->out_buf_end - ctx->out_buf_cur)
         {
             default:
@@ -234,6 +246,7 @@ DEFINE_INTERRUPT_CALLBACK(spi_isr_grp, cs_isr, arg)
         uint32_t bytes_written = 0;
 
         read_bits = port_force_input(ctx->p_mosi, &data);
+
         receive_part_word(ctx, data, &read_bits);
         bytes_read = ctx->in_buf_cur - ctx->in_buf;
         port_clear_buffer(ctx->p_mosi);
@@ -324,6 +337,8 @@ void spi_slave(
     port_set_trigger_in_not_equal(p_cs, int_ctx.cs_val);
 
     interrupt_unmask_all();
+
+    port_clear_buffer(p_miso);
 
     while (1) {
         in_word = port_in(p_mosi);
